@@ -1,36 +1,34 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Indomie Corner
 
-## Getting Started
+Demo toko Next.js dengan katalog, checkout, dan status pembayaran yang disimpan di MongoDB.
 
-First, run the development server:
+## MongoDB setup
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Gunakan MongoDB lokal atau MongoDB Atlas. Salin `.env.example` menjadi `.env.local`, lalu isi `MONGODB_URI` dengan connection string database Anda. Contoh lokal:
+
+```env
+MONGODB_URI=mongodb://127.0.0.1:27017/indomie_corner
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Jalankan MongoDB, kemudian mulai aplikasi:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm install
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Buka `http://localhost:3000`. Produk demo dimasukkan ke koleksi `products` secara otomatis saat endpoint katalog pertama kali dipanggil.
 
-## Learn More
+## MongoDB collections
 
-To learn more about Next.js, take a look at the following resources:
+- `products`: nama, kategori, harga, gambar, badge, dan status aktif.
+- `checkouts`: informasi penerima, snapshot item/harga, pajak, ongkir, total, dan status pesanan.
+- `payments`: checkout terkait, metode, jumlah, provider, waktu, dan status pembayaran.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Checkout menyimpan snapshot harga agar tagihan tidak berubah jika harga katalog diedit kemudian. Tombol bayar saat ini memakai simulasi: endpoint demo menandai payment dan checkout menjadi `paid`. Integrasi transaksi sungguhan memerlukan gateway server-side dan verifikasi webhook.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## API routes
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `GET /api/products`: membaca katalog dan menyiapkan data produk awal.
+- `POST /api/checkouts`: membuat checkout serta payment berstatus `pending`.
+- `POST /api/payments/:paymentId/simulate`: simulasi pembayaran berhasil dan memperbarui status menjadi `paid`.

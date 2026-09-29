@@ -1,6 +1,6 @@
             'use client';
 
-            import { useMemo, useState } from 'react';
+            import { useEffect, useMemo, useState } from 'react';
             import {
               ArrowLeft,
               ArrowRight,
@@ -17,7 +17,7 @@
             } from 'lucide-react';
 
             type Product = {
-              id: number;
+              id: string;
               name: string;
               description: string;
               category: string;
@@ -25,60 +25,6 @@
               image: string;
               badge?: string;
             };
-
-            const products: Product[] = [
-              {
-                id: 1,
-                name: 'Indomie Mie Goreng',
-                description: 'Rasa original · isi 5 bungkus',
-                category: 'Mie goreng',
-                price: 16500,
-                image: 'https://media.istockphoto.com/id/1493103631/id/foto/indomie-fried-noodles.jpg?s=612x612&w=0&k=20&c=U4_zoj5mlhVG0_Brf7kS6N9_F31mibrqZKcQQ-v-B2s=',
-                badge: 'Best seller',
-              },
-              {
-                id: 2,
-                name: 'Indomie Mie Goreng Rendang',
-                description: 'Rasa rendang · isi 5 bungkus',
-                category: 'Mie goreng',
-                price: 17500,
-                image: 'https://www.marinaswalayan.com/wp-content/uploads/2025/07/indomie-goreng-rendang.webp',
-              },
-              {
-                id: 3,
-                name: 'Indomie Ayam Bawang',
-                description: 'Mie kuah gurih · isi 5 bungkus',
-                category: 'Mie kuah',
-                price: 15500,
-                image: 'https://awsimages.detik.net.id/community/media/visual/2022/11/06/trik-indomie-ayam-bawang-2.jpeg?w=1200',
-                badge: 'Favorit',
-              },
-              {
-                id: 4,
-                name: 'Indomie Soto Mie',
-                description: 'Kuah soto segar · isi 5 bungkus',
-                category: 'Mie kuah',
-                price: 15500,
-                image: 'https://preview.redd.it/indomie-soto-ayam-v0-4m9jxmdgmwnf1.jpeg?auto=webp&s=c5320bacadb17632edcfccec15802bae7af12d04',
-              },
-              {
-                id: 5,
-                name: 'Paket Anak Kos',
-                description: '10 bungkus mix mie goreng & kuah',
-                category: 'Paket',
-                price: 33000,
-                image: 'https://i.gojekapi.com/darkroom/gofood-indonesia/v2/images/uploads/02282bbf-306a-4538-adc3-228e47992d16_ecea71e6-ac4b-4836-98ab-da7c8dec5daf_Go-Biz_20200301_234506.jpeg',
-                badge: 'Hemat',
-              },
-              {
-                id: 6,
-                name: 'Paket Warkop',
-                description: 'Mie goreng, mie kuah & topping pilihan',
-                category: 'Paket',
-                price: 42000,
-                image: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS3NV6UnSDi2YPkyMHhDJAKQbL5IEtj7mg7tY2eOzVTKw4mIS4jVG52EkQ0&s=10',
-              },
-            ];
 
             const categories = ['Semua', 'Mie goreng', 'Mie kuah', 'Paket'];
             const shippingFee = 8000;
@@ -99,13 +45,43 @@
 
             export default function Home() {
               const [step, setStep] = useState(1);
+              const [products, setProducts] = useState<Product[]>([]);
+              const [isLoadingProducts, setIsLoadingProducts] = useState(true);
+              const [productError, setProductError] = useState('');
               const [category, setCategory] = useState('Semua');
               const [search, setSearch] = useState('');
-              const [cart, setCart] = useState<Record<number, number>>({});
+              const [cart, setCart] = useState<Record<string, number>>({});
               const [paymentMethod, setPaymentMethod] = useState('QRIS');
               const [customerName, setCustomerName] = useState('');
               const [address, setAddress] = useState('');
               const [isPaid, setIsPaid] = useState(false);
+              const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
+              const [paymentError, setPaymentError] = useState('');
+              const [paymentId, setPaymentId] = useState('');
+              const [checkoutId, setCheckoutId] = useState('');
+              const [confirmedTotal, setConfirmedTotal] = useState<number | null>(null);
+
+              useEffect(() => {
+                let isCurrent = true;
+
+                async function loadProducts() {
+                  try {
+                    const response = await fetch('/api/products');
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error ?? 'Katalog gagal dimuat.');
+                    if (isCurrent) setProducts(data.products);
+                  } catch (error) {
+                    if (isCurrent) {
+                      setProductError(error instanceof Error ? error.message : 'Katalog gagal dimuat.');
+                    }
+                  } finally {
+                    if (isCurrent) setIsLoadingProducts(false);
+                  }
+                }
+
+                void loadProducts();
+                return () => { isCurrent = false; };
+              }, []);
 
               const visibleProducts = useMemo(
                 () =>
@@ -116,7 +92,7 @@
                       .includes(search.toLowerCase());
                     return matchesCategory && matchesSearch;
                   }),
-                [category, search],
+                [category, products, search],
               );
 
               const cartItems = products.filter((product) => (cart[product.id] ?? 0) > 0);
@@ -129,7 +105,7 @@
               const deliveryFee = itemCount > 0 && subtotal < 150000 ? shippingFee : 0;
               const total = subtotal + tax + deliveryFee;
 
-              function changeQuantity(productId: number, change: number) {
+              function changeQuantity(productId: string, change: number) {
                 setCart((current) => {
                   const nextQuantity = (current[productId] ?? 0) + change;
                   const next = { ...current };
@@ -141,6 +117,44 @@
 
               function beginCheckout() {
                 if (itemCount > 0) setStep(2);
+              }
+
+              async function submitPayment() {
+                if (!customerName.trim() || !address.trim() || isSubmittingPayment) return;
+                setIsSubmittingPayment(true);
+                setPaymentError('');
+
+                try {
+                  let activePaymentId = paymentId;
+
+                  if (!activePaymentId) {
+                    const checkoutResponse = await fetch('/api/checkouts', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        customerName,
+                        address,
+                        paymentMethod,
+                        items: Object.entries(cart).map(([productId, quantity]) => ({ productId, quantity })),
+                      }),
+                    });
+                    const checkoutData = await checkoutResponse.json();
+                    if (!checkoutResponse.ok) throw new Error(checkoutData.error ?? 'Checkout gagal disimpan.');
+                    activePaymentId = checkoutData.paymentId;
+                    setPaymentId(activePaymentId);
+                    setCheckoutId(checkoutData.checkoutId);
+                    setConfirmedTotal(checkoutData.total);
+                  }
+
+                  const paymentResponse = await fetch(`/api/payments/${activePaymentId}/simulate`, { method: 'POST' });
+                  const paymentData = await paymentResponse.json();
+                  if (!paymentResponse.ok) throw new Error(paymentData.error ?? 'Status pembayaran gagal diperbarui.');
+                  setIsPaid(true);
+                } catch (error) {
+                  setPaymentError(error instanceof Error ? error.message : 'Pembayaran gagal diproses.');
+                } finally {
+                  setIsSubmittingPayment(false);
+                }
               }
 
               const stepNames = ['Pilih produk', 'Checkout', 'Pembayaran'];
@@ -194,9 +208,9 @@
                       <section className="success-view">
                         <div className="success-icon"><Check size={30} strokeWidth={1.8} /></div>
                         <h2>Pesananmu sedang<br /><em>kami siapkan.</em></h2>
-                        <p className="success-copy">Terima kasih, {customerName}. Pembayaran sebesar <strong>{formatRupiah(total)}</strong> sudah diterima.</p>
-                        <div className="receipt-number">NO. PESANAN <strong>IM-2026-0418</strong></div>
-                        <button className="primary-button success-return" onClick={() => { setCart({}); setStep(1); setIsPaid(false); setCustomerName(''); setAddress(''); }}>
+                        <p className="success-copy">Terima kasih, {customerName}. Pembayaran sebesar <strong>{formatRupiah(confirmedTotal ?? total)}</strong> sudah diterima.</p>
+                        <div className="receipt-number">NO. PESANAN <strong>IM-{checkoutId.slice(-8).toUpperCase()}</strong></div>
+                        <button className="primary-button success-return" onClick={() => { setCart({}); setStep(1); setIsPaid(false); setCustomerName(''); setAddress(''); setPaymentId(''); setCheckoutId(''); setConfirmedTotal(null); }}>
                           Kembali ke menu <ArrowRight size={16} />
                         </button>
                       </section>
@@ -228,7 +242,9 @@
                             </div>
 
                             <div className="product-grid">
-                              {visibleProducts.map((product, index) => (
+                              {isLoadingProducts && <div className="empty-search">Memuat katalog...</div>}
+                              {!isLoadingProducts && productError && <div className="empty-search"><strong>Katalog belum tersedia</strong><span>{productError}</span></div>}
+                              {!isLoadingProducts && !productError && visibleProducts.map((product, index) => (
                                 <article className="product-card" key={product.id} style={{ animationDelay: `${index * 65}ms` }}>
                                   <div className="product-photo" style={{ backgroundImage: `url("${productImage(product.image, 760)}")` }} role="img" aria-label={product.name}>
                                     {product.badge && <span className="product-badge">{product.badge}</span>}
@@ -253,7 +269,7 @@
                                   </div>
                                 </article>
                               ))}
-                              {visibleProducts.length === 0 && <div className="empty-search"><Search size={22} /><strong>Menu tidak ditemukan</strong><span>Coba kata kunci atau kategori lain.</span></div>}
+                              {!isLoadingProducts && !productError && visibleProducts.length === 0 && <div className="empty-search"><Search size={22} /><strong>Menu tidak ditemukan</strong><span>Coba kata kunci atau kategori lain.</span></div>}
                             </div>
 
                             {itemCount > 0 && (
@@ -315,7 +331,8 @@
                               <div className="mini-order-list">{cartItems.map((product) => <div key={product.id}><span>{product.name} <b>× {cart[product.id]}</b></span><strong>{formatRupiah(product.price * cart[product.id])}</strong></div>)}</div>
                               <div className="summary-lines"><div><span>Subtotal</span><strong>{formatRupiah(subtotal)}</strong></div><div><span>Pajak (11%)</span><strong>{formatRupiah(tax)}</strong></div><div><span>Ongkos kirim</span><strong>{deliveryFee ? formatRupiah(deliveryFee) : 'Gratis'}</strong></div></div>
                               <div className="summary-total"><span>Total tagihan</span><strong>{formatRupiah(total)}</strong></div>
-                              <button className="primary-button full-button pay-button" onClick={() => setIsPaid(true)} disabled={!customerName.trim() || !address.trim()}><ShieldCheck size={16} /> Bayar {formatRupiah(total)}</button>
+                              <button className="primary-button full-button pay-button" onClick={submitPayment} disabled={!customerName.trim() || !address.trim() || isSubmittingPayment}><ShieldCheck size={16} /> {isSubmittingPayment ? 'Memproses...' : `Bayar ${formatRupiah(total)}`}</button>
+                              {paymentError && <p className="api-error" role="alert">{paymentError}</p>}
                             </aside>
                           </div>
                         )}
