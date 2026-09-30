@@ -38,7 +38,9 @@ export async function POST(request: Request) {
       provider: 'xendit',
       providerReference: event.external_id,
     });
-    if (!payment) return Response.json({ error: 'Payment tidak ditemukan.' }, { status: 404 });
+    if (!payment) {
+      return Response.json({ received: true, ignored: true, reason: 'payment_not_found' });
+    }
     if (payment.providerInvoiceId && event.id && payment.providerInvoiceId !== event.id) {
       return Response.json({ error: 'ID invoice tidak cocok.' }, { status: 409 });
     }

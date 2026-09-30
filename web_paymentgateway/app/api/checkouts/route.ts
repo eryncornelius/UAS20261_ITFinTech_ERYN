@@ -21,6 +21,15 @@ export async function POST(request: Request) {
         { status: 503 },
       );
     }
+    let parsedAppUrl: URL;
+    try {
+      parsedAppUrl = new URL(appUrl);
+    } catch {
+      return Response.json({ error: 'APP_URL harus berupa URL publik HTTPS.' }, { status: 503 });
+    }
+    if (parsedAppUrl.protocol !== 'https:' || ['localhost', '127.0.0.1'].includes(parsedAppUrl.hostname)) {
+      return Response.json({ error: 'APP_URL harus berupa URL publik HTTPS, bukan localhost.' }, { status: 503 });
+    }
 
     const body = await request.json();
     const customerName = typeof body.customerName === 'string' ? body.customerName.trim() : '';
@@ -96,30 +105,41 @@ export async function POST(request: Request) {
     payment.providerReference = externalId;
     await payment.save();
 
-    const invoiceResponse = await fetch('https://api.xendit.co/v2/invoices', {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${secretKey}:`).toString('base64')}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        external_id: externalId,
-        amount: total,
-        currency: 'IDR',
-        description: `Pesanan Indomie Corner ${checkout._id.toString()}`,
-        invoice_duration: 86400,
-        success_redirect_url: `${appUrl}/?checkout_id=${checkout._id.toString()}`,
-        failure_redirect_url: `${appUrl}/?checkout_id=${checkout._id.toString()}&payment=failed`,
-        payment_methods: xenditMethods[method],
-        customer: { given_names: customerName },
-        items: checkoutItems.map((item) => ({
-          name: item.name,
-          quantity: item.quantity,
-          price: item.unitPrice,
-          category: item.category,
-        })),
-      }),
-    });
+    let invoiceResponse: Response;
+    try {
+      invoiceResponse = await fetch('https://api.xendit.co/v2/invoices', {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${secretKey}:`).toString('base64')}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          external_id: externalId,
+          amount: total,
+          currency: 'IDR',
+          description: `Pesanan Indomie Corner ${checkout._id.toString()}`,
+          invoice_duration: 86400,
+          success_redirect_url: `${appUrl}/payment/return?checkout_id=${checkout._id.toString()}`,
+          failure_redirect_url: `${appUrl}/payment/return?checkout_id=${checkout._id.toString()}&payment=failed`,
+          payment_methods: xenditMethods[method],
+          customer: { given_names: customerName },
+          items: [
+            ...checkoutItems.map((item) => ({
+              name: item.name,
+              quantity: item.quantity,
+              price: item.unitPrice,
+              category: item.category,
+            })),
+            ...(tax > 0 ? [{ name: 'Pajak', quantity: 1, price: tax, category: 'Biaya' }] : []),
+            ...(shipping > 0 ? [{ name: 'Ongkos kirim', quantity: 1, price: shipping, category: 'Pengiriman' }] : []),
+          ],
+        }),
+      });
+    } catch {
+      await Payment.updateOne({ _id: payment._id }, { $set: { status: 'failed' } });
+      await Checkout.updateOne({ _id: checkout._id }, { $set: { status: 'cancelled' } });
+      return Response.json({ error: 'Tidak dapat menghubungi Xendit. Coba lagi beberapa saat.' }, { status: 502 });
+    }
     const invoice = await invoiceResponse.json();
     if (!invoiceResponse.ok || typeof invoice.invoice_url !== 'string' || typeof invoice.id !== 'string') {
       await Payment.updateOne({ _id: payment._id }, { $set: { status: 'failed' } });
