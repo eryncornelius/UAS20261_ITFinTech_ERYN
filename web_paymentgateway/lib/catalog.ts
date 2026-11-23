@@ -14,7 +14,7 @@ export const initialProducts = [
     description: 'Rasa rendang · isi 5 bungkus',
     category: 'Mie goreng',
     price: 17500,
-    image: 'https://www.marinaswalayan.com/wp-content/uploads/2025/07/indomie-goreng-rendang.webp',
+    image: 'https://javamarkt.com/cdn/shop/files/hf_20260827_000656_53ff2cc2-66fe-42e0-8ad5-fe53a74941fe.png?v=1787789438&width=3840',
   },
   {
     slug: 'indomie-ayam-bawang',

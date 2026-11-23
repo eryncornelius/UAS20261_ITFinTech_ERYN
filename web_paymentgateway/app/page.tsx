@@ -1,7 +1,7 @@
 import Storefront from '@/components/Storefront';
-import { initialProducts } from '@/lib/catalog';
-import { connectToDatabase } from '@/lib/mongodb';
-import { Product } from '@/lib/models';
+import { getCurrentUser } from '@/lib/auth';
+import { connectToDatabase, getMongoErrorMessage } from '@/lib/mongodb';
+import { Product, type AuthUser } from '@/lib/models';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,19 +18,10 @@ type StoreProduct = {
 export default async function Home() {
   let products: StoreProduct[] = [];
   let catalogError = '';
+  let currentUser: AuthUser | null = null;
 
   try {
     await connectToDatabase();
-    await Product.bulkWrite(
-      initialProducts.map((product) => ({
-        updateOne: {
-          filter: { slug: product.slug },
-          update: { $setOnInsert: product },
-          upsert: true,
-        },
-      })),
-    );
-
     const databaseProducts = await Product.find({ isActive: true }).sort({ category: 1, name: 1 }).lean();
     products = databaseProducts.map((product) => ({
       id: product._id.toString(),
@@ -41,9 +32,10 @@ export default async function Home() {
       image: product.image,
       badge: product.badge,
     }));
+    currentUser = await getCurrentUser();
   } catch (error) {
-    catalogError = error instanceof Error ? error.message : 'Katalog gagal dimuat.';
+    catalogError = getMongoErrorMessage(error);
   }
 
-  return <Storefront initialProducts={products} catalogError={catalogError} />;
+  return <Storefront initialProducts={products} catalogError={catalogError} currentUser={currentUser} />;
 }

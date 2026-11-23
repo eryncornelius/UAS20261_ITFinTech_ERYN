@@ -1,6 +1,16 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
+import AuthNav from '@/components/AuthNav';
+import type { AuthUser } from '@/lib/models';
+import { useRouter } from 'next/navigation';
+import {
+  clearCart,
+  getCartSnapshot,
+  getEmptyCartSnapshot,
+  saveCart,
+  subscribeToCart,
+} from '@/lib/cart-store';
 import {
   ArrowLeft,
   ArrowRight,
@@ -29,6 +39,7 @@ type Product = {
 type StorefrontProps = {
   initialProducts: Product[];
   catalogError: string;
+  currentUser: AuthUser | null;
 };
 
 const categories = ['Semua', 'Mie goreng', 'Mie kuah', 'Paket'];
@@ -48,14 +59,21 @@ function formatRupiah(amount: number) {
   }).format(amount);
 }
 
-export default function Storefront({ initialProducts, catalogError }: StorefrontProps) {
+export default function Storefront({ initialProducts, catalogError, currentUser }: StorefrontProps) {
+  const router = useRouter();
   const [step, setStep] = useState(1);
   const [category, setCategory] = useState('Semua');
   const [search, setSearch] = useState('');
-  const [cart, setCart] = useState<Record<string, number>>({});
+  const storedCart = useSyncExternalStore(subscribeToCart, getCartSnapshot, getEmptyCartSnapshot);
+  const [cartStorageError, setCartStorageError] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('QRIS');
-  const [customerName, setCustomerName] = useState('');
+  const [customerName, setCustomerName] = useState(currentUser?.name ?? '');
   const [address, setAddress] = useState('');
+  const [voucherCode, setVoucherCode] = useState('');
+  const [appliedVoucherCode, setAppliedVoucherCode] = useState('');
+  const [discountAmount, setDiscountAmount] = useState(0);
+  const [voucherMessage, setVoucherMessage] = useState('');
+  const [isValidatingVoucher, setIsValidatingVoucher] = useState(false);
   const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
   const [paymentError, setPaymentError] = useState('');
 
@@ -71,28 +89,93 @@ export default function Storefront({ initialProducts, catalogError }: Storefront
     [category, initialProducts, search],
   );
 
+  const validProductIds = useMemo(() => new Set(initialProducts.map((product) => product.id)), [initialProducts]);
+  const cart = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(storedCart).filter(([productId]) => validProductIds.has(productId)),
+      ),
+    [storedCart, validProductIds],
+  );
   const cartItems = initialProducts.filter((product) => (cart[product.id] ?? 0) > 0);
   const itemCount = Object.values(cart).reduce((total, quantity) => total + quantity, 0);
   const subtotal = cartItems.reduce(
     (total, product) => total + product.price * cart[product.id],
     0,
   );
-  const tax = Math.round(subtotal * 0.11);
+  const tax = Math.round((subtotal - discountAmount) * 0.11);
   const deliveryFee = itemCount > 0 && subtotal < 150000 ? shippingFee : 0;
-  const total = subtotal + tax + deliveryFee;
+  const total = subtotal - discountAmount + tax + deliveryFee;
 
   function changeQuantity(productId: string, change: number) {
-    setCart((current) => {
-      const nextQuantity = (current[productId] ?? 0) + change;
-      const next = { ...current };
-      if (nextQuantity <= 0) delete next[productId];
-      else next[productId] = nextQuantity;
-      return next;
-    });
+    const nextQuantity = (cart[productId] ?? 0) + change;
+    const next = { ...cart };
+    if (nextQuantity <= 0) delete next[productId];
+    else next[productId] = nextQuantity;
+    if (!saveCart(next)) setCartStorageError('Keranjang tidak dapat disimpan di browser ini.');
+    else setCartStorageError('');
+    if (appliedVoucherCode) {
+      setDiscountAmount(0);
+      setAppliedVoucherCode('');
+      setVoucherMessage('Subtotal berubah. Validasi voucher kembali.');
+    }
+  }
+
+  function removeFromCart(productId: string) {
+    const next = { ...cart };
+    delete next[productId];
+    if (!saveCart(next)) setCartStorageError('Keranjang tidak dapat disimpan di browser ini.');
+    else setCartStorageError('');
+    if (appliedVoucherCode) {
+      setDiscountAmount(0);
+      setAppliedVoucherCode('');
+      setVoucherMessage('Subtotal berubah. Validasi voucher kembali.');
+    }
+  }
+
+  async function applyVoucher() {
+    if (!currentUser || currentUser.role !== 'customer') {
+      setVoucherMessage('Masuk sebagai customer untuk menggunakan voucher.');
+      return;
+    }
+    if (!voucherCode.trim() || isValidatingVoucher) return;
+    setIsValidatingVoucher(true);
+    setVoucherMessage('');
+    setDiscountAmount(0);
+    setAppliedVoucherCode('');
+    try {
+      const response = await fetch('/api/vouchers/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: voucherCode, subtotal }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? 'Voucher tidak dapat digunakan.');
+      setDiscountAmount(data.discountAmount);
+      setAppliedVoucherCode(data.code);
+      setVoucherMessage(`Voucher ${data.code} berhasil diterapkan.`);
+    } catch (error) {
+      setVoucherMessage(error instanceof Error ? error.message : 'Voucher tidak dapat digunakan.');
+    } finally {
+      setIsValidatingVoucher(false);
+    }
   }
 
   function beginCheckout() {
-    if (itemCount > 0) setStep(2);
+    if (itemCount === 0) return;
+    if (!currentUser) {
+      if (saveCart(cart)) {
+        router.push('/login?next=%2F');
+      } else {
+        setCartStorageError('Keranjang tidak dapat disimpan. Izinkan penyimpanan situs lalu coba lagi.');
+      }
+      return;
+    }
+    if (currentUser.role !== 'customer') {
+      router.push('/account');
+      return;
+    }
+    setStep(2);
   }
 
   async function submitPayment() {
@@ -108,11 +191,13 @@ export default function Storefront({ initialProducts, catalogError }: Storefront
           customerName,
           address,
           paymentMethod,
+          voucherCode: appliedVoucherCode,
           items: Object.entries(cart).map(([productId, quantity]) => ({ productId, quantity })),
         }),
       });
       const checkoutData = await checkoutResponse.json();
       if (!checkoutResponse.ok) throw new Error(checkoutData.error ?? 'Checkout gagal disimpan.');
+      clearCart();
       window.location.assign(checkoutData.invoiceUrl);
     } catch (error) {
       setPaymentError(error instanceof Error ? error.message : 'Pembayaran gagal diproses.');
@@ -135,11 +220,14 @@ export default function Storefront({ initialProducts, catalogError }: Storefront
           <a href="#cerita">Cerita kami</a>
           <a href="#lokasi">Lokasi</a>
         </nav>
-        <button className="cart-trigger" onClick={beginCheckout} aria-label={`Keranjang, ${itemCount} item`}>
-          <ShoppingBag size={19} strokeWidth={1.8} />
-          <span className="cart-trigger-label">Keranjang</span>
-          <span className="cart-count">{itemCount}</span>
-        </button>
+        <div className="header-actions">
+          <AuthNav user={currentUser} />
+          <button className="cart-trigger" onClick={beginCheckout} aria-label={`Keranjang, ${itemCount} item`}>
+            <ShoppingBag size={19} strokeWidth={1.8} />
+            <span className="cart-trigger-label">Keranjang</span>
+            <span className="cart-count">{itemCount}</span>
+          </button>
+        </div>
       </header>
 
       <section className="hero-strip">
@@ -191,6 +279,7 @@ export default function Storefront({ initialProducts, catalogError }: Storefront
               </label>
             </div>
             <div className="product-grid">
+              {cartStorageError && <p className="api-error" role="alert">{cartStorageError}</p>}
               {catalogError && <div className="empty-search"><strong>Katalog belum tersedia</strong><span>{catalogError}</span></div>}
               {!catalogError && visibleProducts.map((product, index) => (
                 <article className="product-card" key={product.id} style={{ animationDelay: `${index * 65}ms` }}>
@@ -222,7 +311,13 @@ export default function Storefront({ initialProducts, catalogError }: Storefront
             {itemCount > 0 && (
               <div className="cart-bar">
                 <div className="cart-bar-info"><span className="cart-bar-icon"><ShoppingBag size={17} /></span><span><strong>{itemCount} item dipilih</strong><small>{formatRupiah(subtotal)} · belum termasuk pajak & ongkir</small></span></div>
-                <button className="primary-button" onClick={beginCheckout}>Lanjut ke checkout <ArrowRight size={16} /></button>
+                <button className="primary-button" onClick={beginCheckout}>
+                  {currentUser?.role === 'customer'
+                    ? 'Lanjut ke checkout'
+                    : currentUser
+                      ? 'Buka dashboard'
+                      : 'Masuk untuk checkout'} <ArrowRight size={16} />
+                </button>
               </div>
             )}
           </>
@@ -239,13 +334,17 @@ export default function Storefront({ initialProducts, catalogError }: Storefront
                     <h3>{product.name}</h3><p>{product.category} · {formatRupiah(product.price)} / item</p>
                     <div className="quantity-control"><button onClick={() => changeQuantity(product.id, -1)} aria-label="Kurangi"><Minus size={14} /></button><span>{cart[product.id]}</span><button onClick={() => changeQuantity(product.id, 1)} aria-label="Tambah"><Plus size={14} /></button></div>
                   </div>
-                  <div className="checkout-item-end"><strong>{formatRupiah(product.price * cart[product.id])}</strong><button className="remove-item" onClick={() => setCart((current) => { const next = { ...current }; delete next[product.id]; return next; })} aria-label={`Hapus ${product.name}`}><X size={15} /></button></div>
+                  <div className="checkout-item-end"><strong>{formatRupiah(product.price * cart[product.id])}</strong><button className="remove-item" onClick={() => removeFromCart(product.id)} aria-label={`Hapus ${product.name}`}><X size={15} /></button></div>
                 </article>
               ))}
             </section>
             <aside className="order-panel">
               <p className="panel-kicker">RINGKASAN</p><h3>Total pesanan</h3>
-              <div className="summary-lines"><div><span>Subtotal</span><strong>{formatRupiah(subtotal)}</strong></div><div><span>Pajak (11%)</span><strong>{formatRupiah(tax)}</strong></div><div><span>Ongkos kirim</span><strong>{deliveryFee ? formatRupiah(deliveryFee) : 'Gratis'}</strong></div></div>
+              <label className="field-label voucher-entry">Kode voucher
+                <span><input value={voucherCode} onChange={(event) => { setVoucherCode(event.target.value.toUpperCase()); setDiscountAmount(0); setAppliedVoucherCode(''); setVoucherMessage(''); }} placeholder="Masukkan kode" maxLength={30} /><button type="button" className="text-back" onClick={applyVoucher} disabled={isValidatingVoucher}>{isValidatingVoucher ? 'Memeriksa...' : 'Pakai'}</button></span>
+              </label>
+              {voucherMessage && <p className="voucher-message" role="status">{voucherMessage}</p>}
+              <div className="summary-lines"><div><span>Subtotal</span><strong>{formatRupiah(subtotal)}</strong></div>{discountAmount > 0 && <div><span>Diskon voucher</span><strong>-{formatRupiah(discountAmount)}</strong></div>}<div><span>Pajak (11%)</span><strong>{formatRupiah(tax)}</strong></div><div><span>Ongkos kirim</span><strong>{deliveryFee ? formatRupiah(deliveryFee) : 'Gratis'}</strong></div></div>
               <div className="summary-total"><span>Total pembayaran</span><strong>{formatRupiah(total)}</strong></div>
               <button className="primary-button full-button" onClick={() => setStep(3)} disabled={itemCount === 0}>Lanjut ke pembayaran <ArrowRight size={16} /></button>
               <p className="secure-note"><ShieldCheck size={14} /> Pembayaran aman dan terenkripsi</p>
@@ -277,7 +376,7 @@ export default function Storefront({ initialProducts, catalogError }: Storefront
             <aside className="order-panel payment-summary">
               <p className="panel-kicker">PESANANMU</p><h3>Ringkasan tagihan</h3>
               <div className="mini-order-list">{cartItems.map((product) => <div key={product.id}><span>{product.name} <b>× {cart[product.id]}</b></span><strong>{formatRupiah(product.price * cart[product.id])}</strong></div>)}</div>
-              <div className="summary-lines"><div><span>Subtotal</span><strong>{formatRupiah(subtotal)}</strong></div><div><span>Pajak (11%)</span><strong>{formatRupiah(tax)}</strong></div><div><span>Ongkos kirim</span><strong>{deliveryFee ? formatRupiah(deliveryFee) : 'Gratis'}</strong></div></div>
+              <div className="summary-lines"><div><span>Subtotal</span><strong>{formatRupiah(subtotal)}</strong></div>{discountAmount > 0 && <div><span>Diskon voucher</span><strong>-{formatRupiah(discountAmount)}</strong></div>}<div><span>Pajak (11%)</span><strong>{formatRupiah(tax)}</strong></div><div><span>Ongkos kirim</span><strong>{deliveryFee ? formatRupiah(deliveryFee) : 'Gratis'}</strong></div></div>
               <div className="summary-total"><span>Total tagihan</span><strong>{formatRupiah(total)}</strong></div>
               <button className="primary-button full-button pay-button" onClick={submitPayment} disabled={!customerName.trim() || !address.trim() || isSubmittingPayment}><ShieldCheck size={16} /> {isSubmittingPayment ? 'Memproses...' : `Bayar ${formatRupiah(total)}`}</button>
               {paymentError && <p className="api-error" role="alert">{paymentError}</p>}

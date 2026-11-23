@@ -1,6 +1,8 @@
+import mongoose from 'mongoose';
 import { timingSafeEqual } from 'node:crypto';
 import { Checkout, Payment } from '@/lib/models';
 import { connectToDatabase } from '@/lib/mongodb';
+import { releaseVoucherUsage } from '@/lib/vouchers';
 
 type XenditInvoiceEvent = {
   id?: string;
@@ -51,11 +53,26 @@ export async function POST(request: Request) {
         return Response.json({ error: 'Nominal pembayaran tidak cocok.' }, { status: 422 });
       }
 
-      if (payment.status !== 'paid') {
-        payment.status = 'paid';
-        payment.paidAt = event.paid_at ? new Date(event.paid_at) : new Date();
-        payment.providerInvoiceId = event.id ?? payment.providerInvoiceId;
-        await payment.save();
+      if (payment.status === 'paid') return Response.json({ received: true, status: 'paid' });
+      if (payment.status !== 'pending') {
+        return Response.json({ error: 'Status pembayaran sudah tidak dapat diubah.' }, { status: 409 });
+      }
+      const paidPayment = await Payment.findOneAndUpdate(
+        { _id: payment._id, status: 'pending' },
+        {
+          $set: {
+            status: 'paid',
+            paidAt: event.paid_at ? new Date(event.paid_at) : new Date(),
+            providerInvoiceId: event.id ?? payment.providerInvoiceId,
+          },
+        },
+        { new: true },
+      );
+      if (!paidPayment) {
+        const latestPayment = await Payment.findById(payment._id).select('status').lean();
+        return latestPayment?.status === 'paid'
+          ? Response.json({ received: true, status: 'paid' })
+          : Response.json({ error: 'Status pembayaran sudah tidak dapat diubah.' }, { status: 409 });
       }
       await Checkout.updateOne(
         { _id: payment.checkoutId, status: 'pending_payment' },
@@ -65,13 +82,27 @@ export async function POST(request: Request) {
     }
 
     if (event.status === 'EXPIRED') {
-      if (payment.status === 'pending') {
-        payment.status = 'expired';
-        await payment.save();
-        await Checkout.updateOne(
-          { _id: payment.checkoutId, status: 'pending_payment' },
-          { $set: { status: 'cancelled' } },
-        );
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          const expiredPayment = await Payment.findOneAndUpdate(
+            { _id: payment._id, status: 'pending' },
+            { $set: { status: 'expired' } },
+            { new: true, session },
+          );
+          if (!expiredPayment) return;
+
+          const checkout = await Checkout.findOneAndUpdate(
+            { _id: payment.checkoutId, status: 'pending_payment' },
+            { $set: { status: 'cancelled' } },
+            { new: true, session },
+          );
+          if (checkout?.voucherId && checkout.customerUserId) {
+            await releaseVoucherUsage(checkout.voucherId, checkout.customerUserId, session);
+          }
+        });
+      } finally {
+        await session.endSession();
       }
       return Response.json({ received: true, status: 'expired' });
     }
