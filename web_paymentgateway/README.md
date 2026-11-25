@@ -15,6 +15,12 @@ APP_URL=https://<public-app-domain>
 
 Jangan commit `.env.local` atau mengekspos secret key di client/browser. Gunakan secret key mode Development untuk uji coba. `APP_URL` harus URL publik HTTPS (Vercel atau URL HTTPS dari ngrok); localhost tidak dapat menerima redirect Xendit.
 
+Xendit tetap menjadi mode bawaan. Untuk menjalankan alur pembayaran tanpa menagih dana, atur `PAYMENT_MODE=simulator`. Mode ini tidak memerlukan `XENDIT_SECRET_KEY`, `XENDIT_WEBHOOK_TOKEN`, atau `APP_URL`; pada halaman status pembayaran customer dapat mensimulasikan hasil berhasil/gagal dan refund internal. Refund simulator hanya mengubah status lokal, tidak memanggil refund Xendit/bank, dan hanya tersedia sebelum pesanan mulai disiapkan.
+
+Biaya layanan dan penerimaan merchant adalah **estimasi demo**, bukan tarif resmi/aktual Xendit atau nilai settlement. Default yang digunakan: QRIS 0,7%, transfer bank Rp4.000, dan kartu 2,9% + Rp2.000. Asumsi dapat diubah lewat `PAYMENT_FEE_QRIS_RATE`, `PAYMENT_FEE_TRANSFER_FIXED`, `PAYMENT_FEE_CARD_RATE`, dan `PAYMENT_FEE_CARD_FIXED` di `.env.local`. Rate berupa pecahan (`0.007` = 0,7%); biaya tetap dalam rupiah. Estimasi biaya disimpan sejak checkout, tetapi hanya dianggap berlaku pada pembayaran berhasil. Pada refund simulator, pokok pembayaran dianggap dikembalikan penuh sementara biaya layanan estimasi tetap menjadi beban merchant, sehingga net menjadi negatif sebesar biaya tersebut.
+
+Dashboard merchant menampilkan ringkasan seluruh transaksi yang pernah berhasil atau direfund: pendapatan kotor (subtotal sebelum diskon), diskon voucher, estimasi biaya payment, refund tercatat, dan penerimaan bersih. Penerimaan bersih dihitung sebagai total pembayaran tertagih dikurangi refund dan biaya payment estimasi. Diskon mencakup transaksi berhasil maupun yang kemudian direfund; transaksi menunggu, gagal, atau kedaluwarsa tidak masuk ringkasan. Refund yang terlihat berasal dari status internal simulator, bukan transfer pengembalian dana nyata.
+
 Jalankan MongoDB, seed katalog demo satu kali (atau setelah memperbarui katalog), kemudian mulai aplikasi:
 
 ```bash
@@ -32,8 +38,8 @@ Buka `http://localhost:3000`. Perintah `npm run db:seed` memasukkan atau memperb
 - `products`: nama, kategori, harga, gambar, badge, dan status aktif.
 - `vouchers` / `voucherUsages`: aturan promo dan counter kuota global/per-customer.
 - `checkouts`: customer, informasi penerima, snapshot item/harga, pajak, ongkir, total, dan status pesanan.
-- `payments`: checkout terkait, metode, jumlah, provider, waktu, dan status pembayaran.
-- `auditLogs`: aktor, perubahan menu/promo/pemenuhan order, dan keputusan review.
+- `payments`: checkout terkait, metode, jumlah, provider, status, estimasi biaya layanan, estimasi penerimaan merchant, dan waktu pembayaran/refund.
+- `auditLogs`: aktor, perubahan status simulasi pembayaran, menu/promo/pemenuhan order, dan keputusan review.
 
 ## Accounts and roles
 
@@ -47,9 +53,11 @@ Jangan simpan password akun di source control atau bagikan melalui chat. Kata sa
 
 Pengguna dapat menghapus akunnya dari `/account` setelah mengonfirmasi kata sandi. Penghapusan menonaktifkan akun, mencabut semua sesi, dan menganonimkan nama/alamat pada riwayat checkout yang sudah selesai. Penghapusan ditolak selama masih ada pesanan aktif, dan admin terakhir tidak dapat menghapus akunnya sendiri. Catatan transaksi dan audit tetap dipertahankan.
 
-Voucher divalidasi kembali oleh server saat checkout. Kuota global dan pemakaian per akun direservasi dalam transaksi MongoDB agar klaim bersamaan tidak melewati batas; gunakan Atlas atau MongoDB lokal yang berjalan sebagai replica set. Counter dikembalikan ketika Xendit mengirim event invoice `EXPIRED`, jadi pastikan webhook mengirim **Invoice paid** dan **Invoice expired** ke endpoint yang sama. Skor risiko awal adalah heuristik yang dapat dijelaskan (akun baru dengan diskon besar, beberapa order dalam 10 menit, diskon ≥30%, atau nilai diskon ≥Rp50.000); skor bukan bukti fraud.
+Voucher divalidasi kembali oleh server saat checkout. Kuota global dan pemakaian per akun direservasi dalam transaksi MongoDB agar klaim bersamaan tidak melewati batas; gunakan Atlas atau MongoDB lokal yang berjalan sebagai replica set. Counter dikembalikan ketika Xendit mengirim event invoice `EXPIRED`, jadi pastikan webhook mengirim **Invoice paid** dan **Invoice expired** ke endpoint yang sama. Skor risiko awal adalah heuristik yang dapat dijelaskan: +30 untuk akun berusia <24 jam dengan diskon ≥Rp20.000, +25 untuk ≥2 order dalam 10 menit terakhir, +20 untuk rasio diskon ≥30%, dan +20 untuk diskon ≥Rp50.000. Order dengan skor ≥40 masuk antrean admin; setiap alasan ditampilkan. Skor bukan bukti fraud atau keputusan otomatis.
 
-Checkout menyimpan snapshot harga agar tagihan tidak berubah jika harga katalog diedit kemudian. Server membuat invoice Xendit dan browser diarahkan ke halaman hosted checkout Xendit. Status tidak ditandai lunas oleh browser; status hanya berubah setelah webhook Xendit lolos verifikasi `x-callback-token`, invoice cocok, dan nominal pembayaran sesuai. Setelah redirect, halaman membaca status checkout dari database sampai webhook mengonfirmasi pembayaran.
+Admin dapat menyetujui atau menolak order dari antrean `/admin` dan mencatat catatan review. Perubahan keputusan dan audit log disimpan dalam satu transaksi MongoDB; satu order hanya dapat diputuskan sekali. Keputusan review tidak membatalkan invoice, mengubah status pembayaran, atau menjalankan refund secara otomatis.
+
+Checkout menyimpan snapshot harga agar tagihan tidak berubah jika harga katalog diedit kemudian. Dalam mode bawaan, server membuat invoice Xendit dan browser diarahkan ke halaman hosted checkout Xendit. Status tidak ditandai lunas oleh browser; status hanya berubah setelah webhook Xendit lolos verifikasi `x-callback-token`, invoice cocok, dan nominal pembayaran sesuai. Setelah redirect, halaman membaca status checkout dari database sampai webhook mengonfirmasi pembayaran. Dalam mode simulator, perubahan status dibatasi ke customer pemilik checkout dan hanya berlaku untuk payment ber-provider `simulator`.
 
 Di Xendit Dashboard, tambahkan webhook untuk **Invoice paid** dengan URL `https://<public-app-domain>/api/webhooks/xendit`. Salin callback verification token yang tampil di pengaturan webhook ke `XENDIT_WEBHOOK_TOKEN`. Pastikan URL tersebut mengarah ke deployment aktif dan dapat diakses dari internet.
 
@@ -60,7 +68,19 @@ Di Xendit Dashboard, tambahkan webhook untuk **Invoice paid** dengan URL `https:
 - `POST /api/auth/login` dan `POST /api/auth/logout`: mengelola sesi akun.
 - `/api/merchant/products` dan `/api/merchant/orders`: operasi menu dan pemenuhan order khusus merchant.
 - `/api/admin/vouchers` dan `/api/admin/reviews`: manajemen voucher dan antrean review khusus admin.
+- `PATCH /api/admin/reviews/:checkoutId`: menyetujui/menolak review risiko dan mencatat keputusan serta catatan admin ke audit log.
 - `POST /api/vouchers/validate`: validasi voucher untuk customer sebelum checkout.
-- `POST /api/checkouts`: membuat checkout/payment `pending`, meminta invoice Xendit, lalu mengembalikan URL hosted checkout.
+- `POST /api/checkouts`: membuat checkout/payment `pending`, lalu meminta invoice Xendit atau mengembalikan URL status internal sesuai `PAYMENT_MODE`.
 - `POST /api/webhooks/xendit`: memverifikasi callback Xendit dan memperbarui payment/checkout secara idempotent.
 - `GET /api/checkouts/:checkoutId`: membaca status setelah pelanggan kembali dari halaman Xendit.
+- `POST /api/checkouts/:checkoutId`: hanya dalam mode simulator, mengubah status transaksi milik customer antara menunggu, berhasil, gagal, dan refund internal.
+
+## Automated tests
+
+Jalankan semua uji otomatis dengan:
+
+```bash
+npm test
+```
+
+Suite ini mencakup validasi voucher valid/kedaluwarsa/kuota habis/pemakaian ulang customer, kalkulasi skor risiko, kalkulasi biaya dan penerimaan merchant/refund, serta fallback cache keranjang di memori ketika `sessionStorage` tidak tersedia. Fallback offline yang diuji hanya berlaku untuk keranjang pada browser; checkout, katalog, dan autentikasi tetap memerlukan server dan koneksi MongoDB.

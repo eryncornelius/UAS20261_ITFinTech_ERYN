@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { Voucher, VoucherUsage } from '@/lib/models';
+import { getVoucherEligibilityError } from '@/lib/voucher-rules';
 
 export class VoucherReservationError extends Error {
   constructor(message: string) {
@@ -34,18 +35,23 @@ export async function validateVoucher(
   if (!voucher) return { valid: false, error: 'Kode voucher tidak ditemukan atau tidak aktif.' };
 
   const now = new Date();
-  if (now < voucher.startsAt || now > voucher.endsAt) {
-    return { valid: false, error: 'Voucher belum berlaku atau sudah kedaluwarsa.' };
-  }
-  if (voucher.usedCount >= voucher.quota) {
-    return { valid: false, error: 'Kuota voucher sudah habis.' };
-  }
-  if (subtotal < voucher.minimumSpend) {
-    return { valid: false, error: `Minimum belanja voucher ini ${voucher.minimumSpend} rupiah.` };
-  }
   const usage = await VoucherUsage.findOne({ voucherId: voucher._id, userId }).lean();
-  if ((usage?.usedCount ?? 0) >= voucher.perUserLimit) {
-    return { valid: false, error: 'Batas pemakaian voucher untuk akun ini sudah tercapai.' };
+  const eligibilityError = getVoucherEligibilityError(
+    {
+      isActive: voucher.isActive,
+      startsAt: voucher.startsAt,
+      endsAt: voucher.endsAt,
+      usedCount: voucher.usedCount,
+      quota: voucher.quota,
+      minimumSpend: voucher.minimumSpend,
+      perUserLimit: voucher.perUserLimit,
+      userUsedCount: usage?.usedCount ?? 0,
+    },
+    subtotal,
+    now,
+  );
+  if (eligibilityError) {
+    return { valid: false, error: eligibilityError };
   }
 
   return {
@@ -71,8 +77,26 @@ export async function reserveVoucherUsage(
     .session(session)
     .lean();
   if (!candidate) throw new VoucherReservationError('Voucher tidak aktif atau sudah kedaluwarsa.');
-  if (subtotal < candidate.minimumSpend) {
-    throw new VoucherReservationError('Subtotal tidak lagi memenuhi minimum voucher.');
+  const existingUsage = await VoucherUsage.findOne({
+    voucherId: candidate._id,
+    userId,
+  }).session(session).lean();
+  const eligibilityError = getVoucherEligibilityError(
+    {
+      isActive: candidate.isActive,
+      startsAt: candidate.startsAt,
+      endsAt: candidate.endsAt,
+      usedCount: candidate.usedCount,
+      quota: candidate.quota,
+      minimumSpend: candidate.minimumSpend,
+      perUserLimit: candidate.perUserLimit,
+      userUsedCount: existingUsage?.usedCount ?? 0,
+    },
+    subtotal,
+    now,
+  );
+  if (eligibilityError) {
+    throw new VoucherReservationError(eligibilityError);
   }
 
   const usage = await VoucherUsage.findOneAndUpdate(

@@ -36,7 +36,7 @@ function readStoredCart(): Cart {
     );
     return currentCart;
   } catch {
-    return emptyCart;
+    return currentCart;
   }
 }
 
@@ -81,7 +81,7 @@ export function clearCart(): void {
   try {
     window.sessionStorage.removeItem(storageKey);
   } catch {
-    return;
+    // Keep the in-memory state consistent even when storage is unavailable.
   }
   cachedValue = null;
   currentCart = emptyCart;

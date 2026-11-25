@@ -28,7 +28,18 @@ type Order = {
   riskScore: number;
   paymentMethod: string;
   paymentStatus: string;
+  serviceFee: number;
+  merchantNet: number;
+  feeIsEstimate: boolean;
   createdAt: string;
+};
+
+type FinancialSummary = {
+  grossRevenue: number;
+  voucherDiscount: number;
+  serviceFee: number;
+  refundAmount: number;
+  netReceipts: number;
 };
 
 type ProductForm = {
@@ -53,6 +64,17 @@ function formatRupiah(amount: number) {
   return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(amount);
 }
 
+function formatPaymentStatus(status: string) {
+  const labels: Record<string, string> = {
+    pending: 'Menunggu',
+    paid: 'Berhasil',
+    failed: 'Gagal',
+    expired: 'Kedaluwarsa',
+    refunded: 'Refund',
+  };
+  return labels[status] ?? status;
+}
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
@@ -67,6 +89,13 @@ async function requestJson(url: string, init?: RequestInit) {
 export default function MerchantDashboard() {
   const [products, setProducts] = useState<Product[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [financialSummary, setFinancialSummary] = useState<FinancialSummary>({
+    grossRevenue: 0,
+    voucherDiscount: 0,
+    serviceFee: 0,
+    refundAmount: 0,
+    netReceipts: 0,
+  });
   const [form, setForm] = useState<ProductForm>(emptyForm);
   const [editingId, setEditingId] = useState('');
   const [error, setError] = useState('');
@@ -81,6 +110,7 @@ export default function MerchantDashboard() {
     ]);
     setProducts(productData.products);
     setOrders(orderData.orders);
+    setFinancialSummary(orderData.financialSummary);
     setIsLoading(false);
   }
 
@@ -94,6 +124,7 @@ export default function MerchantDashboard() {
         if (!active) return;
         setProducts(productData.products);
         setOrders(orderData.orders);
+        setFinancialSummary(orderData.financialSummary);
       })
       .catch((loadError: unknown) => {
         if (active) setError(loadError instanceof Error ? loadError.message : 'Dashboard gagal dimuat.');
@@ -211,6 +242,14 @@ export default function MerchantDashboard() {
 
         <section className="dashboard-panel">
           <div className="dashboard-panel-heading"><div><p className="panel-kicker">TRANSAKSI</p><h2>Pesanan terbaru</h2></div><span className="dashboard-count">{orders.length} pesanan</span></div>
+          <div className="merchant-financial-summary">
+            <div><span>Pendapatan kotor (subtotal)</span><strong>{formatRupiah(financialSummary.grossRevenue)}</strong></div>
+            <div><span>Diskon voucher</span><strong>{formatRupiah(financialSummary.voucherDiscount)}</strong></div>
+            <div><span>Biaya payment estimasi</span><strong>{formatRupiah(financialSummary.serviceFee)}</strong></div>
+            <div><span>Refund tercatat</span><strong>{formatRupiah(financialSummary.refundAmount)}</strong></div>
+            <div className="net-receipts"><span>Penerimaan bersih estimasi</span><strong>{formatRupiah(financialSummary.netReceipts)}</strong></div>
+          </div>
+          <small className="financial-disclaimer">Ringkasan seluruh transaksi berhasil dan refund. Penerimaan bersih = pembayaran tertagih − refund − biaya payment estimasi. Biaya bukan angka settlement Xendit; refund demo tidak mengirim dana sungguhan.</small>
           {isLoading ? <p>Memuat pesanan…</p> : orders.length === 0 ? <p className="empty-dashboard">Belum ada pesanan.</p> : (
             <div className="managed-order-list">
               {orders.map((order) => (
@@ -218,7 +257,8 @@ export default function MerchantDashboard() {
                   <div className="order-heading"><strong>IM-{order.id.slice(-8).toUpperCase()} · {order.customerName}</strong><span>{formatDate(order.createdAt)}</span></div>
                   <p>{order.items.map((item) => `${item.name} × ${item.quantity}`).join(', ')}</p>
                   <p className="order-address">{order.address}</p>
-                  <div className="order-financial"><span>Tagihan {formatRupiah(order.total)} · {order.paymentMethod} / {order.paymentStatus}</span><span>{order.reviewStatus === 'pending' ? `Perlu review risiko (${order.riskScore})` : order.status}</span></div>
+                  <div className="order-financial"><span>Tagihan {formatRupiah(order.total)} · {order.paymentMethod} / {formatPaymentStatus(order.paymentStatus)}</span><span>{order.reviewStatus === 'pending' ? `Perlu review risiko (${order.riskScore})` : order.status}</span></div>
+                  <div className="order-financial"><span>Biaya layanan {order.feeIsEstimate ? 'estimasi' : ''}: {formatRupiah(order.serviceFee)}</span><span>Penerimaan bersih: {formatRupiah(order.merchantNet)}</span></div>
                   {order.discountAmount > 0 && <small>Diskon voucher {formatRupiah(order.discountAmount)}</small>}
                   <label className="order-status-control">Status pemenuhan
                     <select value={order.fulfillmentStatus} disabled={order.status !== 'paid' || order.fulfillmentStatus === 'completed' || order.fulfillmentStatus === 'cancelled'} onChange={(event) => void updateOrder(order.id, event.target.value)}>

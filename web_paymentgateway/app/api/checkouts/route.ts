@@ -2,6 +2,12 @@ import mongoose from 'mongoose';
 import { getCurrentUser, isSameOrigin } from '@/lib/auth';
 import { connectToDatabase, getMongoErrorMessage, isMongoUnavailable } from '@/lib/mongodb';
 import { Checkout, Payment, Product } from '@/lib/models';
+import {
+  calculateEstimatedServiceFee,
+  getPaymentFeeConfig,
+  PaymentFeeConfigurationError,
+  type PaymentMethod,
+} from '@/lib/payment-financials';
 import { scoreOrderRisk } from '@/lib/risk';
 import {
   releaseVoucherUsage,
@@ -11,8 +17,8 @@ import {
 
 const deliveryThreshold = 150000;
 const deliveryFee = 8000;
-const paymentMethods = ['QRIS', 'Transfer bank', 'Kartu debit / kredit'];
-const xenditMethods: Record<string, string[]> = {
+const paymentMethods: PaymentMethod[] = ['QRIS', 'Transfer bank', 'Kartu debit / kredit'];
+const xenditMethods: Record<PaymentMethod, string[]> = {
   QRIS: ['QRIS'],
   'Transfer bank': ['BCA', 'BNI', 'BRI', 'MANDIRI', 'PERMATA'],
   'Kartu debit / kredit': ['CREDIT_CARD'],
@@ -22,6 +28,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isPaymentMethod(value: string): value is PaymentMethod {
+  return paymentMethods.some((method) => method === value);
+}
+
 async function failCheckout(
   checkoutId: string,
   paymentId: string,
@@ -29,7 +39,10 @@ async function failCheckout(
   customerId: string,
 ): Promise<void> {
   await Promise.all([
-    Payment.updateOne({ _id: paymentId }, { $set: { status: 'failed' } }),
+    Payment.updateOne(
+      { _id: paymentId },
+      { $set: { status: 'failed', serviceFee: 0, merchantNet: 0 } },
+    ),
     Checkout.updateOne({ _id: checkoutId }, { $set: { status: 'cancelled' } }),
   ]);
   if (voucherId) {
@@ -54,22 +67,28 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Hanya customer yang dapat membuat pesanan.' }, { status: 403 });
     }
 
-    const secretKey = process.env.XENDIT_SECRET_KEY;
-    const appUrl = process.env.APP_URL?.replace(/\/$/, '');
-    if (!secretKey || !appUrl) {
-      return Response.json(
-        { error: 'XENDIT_SECRET_KEY dan APP_URL harus dikonfigurasi di environment server.' },
-        { status: 503 },
-      );
+    const paymentMode = process.env.PAYMENT_MODE ?? 'xendit';
+    if (paymentMode !== 'xendit' && paymentMode !== 'simulator') {
+      return Response.json({ error: 'PAYMENT_MODE harus bernilai xendit atau simulator.' }, { status: 503 });
     }
-    let parsedAppUrl: URL;
-    try {
-      parsedAppUrl = new URL(appUrl);
-    } catch {
-      return Response.json({ error: 'APP_URL harus berupa URL publik HTTPS.' }, { status: 503 });
-    }
-    if (parsedAppUrl.protocol !== 'https:' || ['localhost', '127.0.0.1'].includes(parsedAppUrl.hostname)) {
-      return Response.json({ error: 'APP_URL harus berupa URL publik HTTPS, bukan localhost.' }, { status: 503 });
+    const secretKey = paymentMode === 'xendit' ? process.env.XENDIT_SECRET_KEY : undefined;
+    const appUrl = paymentMode === 'xendit' ? process.env.APP_URL?.replace(/\/$/, '') : undefined;
+    if (paymentMode === 'xendit') {
+      if (!secretKey || !appUrl) {
+        return Response.json(
+          { error: 'XENDIT_SECRET_KEY dan APP_URL harus dikonfigurasi di environment server.' },
+          { status: 503 },
+        );
+      }
+      let parsedAppUrl: URL;
+      try {
+        parsedAppUrl = new URL(appUrl);
+      } catch {
+        return Response.json({ error: 'APP_URL harus berupa URL publik HTTPS.' }, { status: 503 });
+      }
+      if (parsedAppUrl.protocol !== 'https:' || ['localhost', '127.0.0.1'].includes(parsedAppUrl.hostname)) {
+        return Response.json({ error: 'APP_URL harus berupa URL publik HTTPS, bukan localhost.' }, { status: 503 });
+      }
     }
 
     const body: unknown = await request.json().catch(() => null);
@@ -85,7 +104,7 @@ export async function POST(request: Request) {
     if (!customerName || customerName.length > 120 || !address || address.length > 500) {
       return Response.json({ error: 'Nama dan alamat pengiriman wajib diisi.' }, { status: 400 });
     }
-    if (!paymentMethods.includes(method)) {
+    if (!isPaymentMethod(method)) {
       return Response.json({ error: 'Metode pembayaran tidak valid.' }, { status: 400 });
     }
     if (
@@ -140,6 +159,7 @@ export async function POST(request: Request) {
     });
     const subtotal = checkoutItems.reduce((sum, item) => sum + item.lineTotal, 0);
     let discountAmount = 0;
+    let serviceFee = 0;
     let tax = 0;
     const shipping = subtotal > 0 && subtotal < deliveryThreshold ? deliveryFee : 0;
     let total = 0;
@@ -150,6 +170,7 @@ export async function POST(request: Request) {
     let paymentId = '';
     let externalId = '';
     let reservedVoucherId = '';
+    const feeConfig = getPaymentFeeConfig();
 
     const session = await mongoose.startSession();
     try {
@@ -170,6 +191,7 @@ export async function POST(request: Request) {
 
         tax = Math.round(((subtotal - discountAmount) * 11) / 100);
         total = subtotal - discountAmount + tax + shipping;
+        serviceFee = calculateEstimatedServiceFee(method, total, feeConfig);
         const risk = await scoreOrderRisk(user.id, subtotal, discountAmount, session);
         riskScore = risk.score;
         riskReasons = risk.reasons;
@@ -197,7 +219,15 @@ export async function POST(request: Request) {
           { session },
         );
         const [payment] = await Payment.create(
-          [{ checkoutId: checkout._id, method, amount: total, provider: 'xendit' }],
+          [{
+            checkoutId: checkout._id,
+            method,
+            amount: total,
+            provider: paymentMode,
+            serviceFee,
+            merchantNet: 0,
+            feeIsEstimate: true,
+          }],
           { session },
         );
         checkoutId = checkout._id.toString();
@@ -211,6 +241,29 @@ export async function POST(request: Request) {
       throw error;
     } finally {
       await session.endSession();
+    }
+
+    if (paymentMode === 'simulator') {
+      return Response.json(
+        {
+          checkoutId,
+          paymentId,
+          invoiceUrl: `/payment/return?checkout_id=${encodeURIComponent(checkoutId)}`,
+          total,
+          discountAmount,
+          serviceFee,
+          merchantNet: 0,
+          feeIsEstimate: true,
+          provider: 'simulator',
+          riskScore,
+          reviewStatus,
+        },
+        { status: 201 },
+      );
+    }
+
+    if (!secretKey || !appUrl) {
+      throw new Error('XENDIT_SECRET_KEY dan APP_URL harus dikonfigurasi di environment server.');
     }
 
     let invoiceResponse: Response;
@@ -281,6 +334,10 @@ export async function POST(request: Request) {
         invoiceUrl: invoice.invoice_url,
         total,
         discountAmount,
+        serviceFee,
+        merchantNet: 0,
+        feeIsEstimate: true,
+        provider: 'xendit',
         riskScore,
         reviewStatus,
       },
@@ -288,6 +345,9 @@ export async function POST(request: Request) {
     );
   } catch (error) {
     const unavailable = isMongoUnavailable(error);
+    if (error instanceof PaymentFeeConfigurationError) {
+      return Response.json({ error: error.message }, { status: 503 });
+    }
     const message = unavailable
       ? getMongoErrorMessage(error)
       : error instanceof Error && error.message.includes('XENDIT_SECRET_KEY')

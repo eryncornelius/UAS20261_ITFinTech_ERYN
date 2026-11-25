@@ -9,7 +9,7 @@
     "lint": "eslint",
     "db:seed": "tsx scripts/seed.ts",
     "db:create-user": "tsx scripts/create-user.ts",
-    "test": "tsx --test tests/auth-crypto.test.ts tests/vouchers.test.ts"
+    "test": "tsx --test tests/auth-crypto.test.ts tests/vouchers.test.ts tests/payment-financials.test.ts tests/risk.test.ts tests/merchant-financials.test.ts tests/cart-store.test.ts"
   },
   "dependencies": {
     "lucide-react": "^1.48.0",

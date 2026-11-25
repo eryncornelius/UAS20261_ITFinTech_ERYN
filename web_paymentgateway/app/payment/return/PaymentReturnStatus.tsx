@@ -4,12 +4,16 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { ArrowRight, Check, Flame, ShieldCheck } from 'lucide-react';
 
-type ReturnState = 'waiting' | 'paid' | 'failed';
+type ReturnState = 'waiting' | 'paid' | 'failed' | 'refunded';
 type PaymentReturnStatusProps = {
   checkoutId: string;
   initialState: ReturnState;
   initialCustomerName: string;
   initialTotal: number | null;
+  initialPaymentProvider: string;
+  initialServiceFee: number;
+  initialMerchantNet: number;
+  initialFeeIsEstimate: boolean;
   initialError: string;
 };
 
@@ -26,12 +30,20 @@ export default function PaymentReturnStatus({
   initialState,
   initialCustomerName,
   initialTotal,
+  initialPaymentProvider,
+  initialServiceFee,
+  initialMerchantNet,
+  initialFeeIsEstimate,
   initialError,
 }: PaymentReturnStatusProps) {
   const [state, setState] = useState<ReturnState>(initialState);
   const [customerName, setCustomerName] = useState(initialCustomerName);
   const [total, setTotal] = useState<number | null>(initialTotal);
+  const [serviceFee, setServiceFee] = useState(initialServiceFee);
+  const [merchantNet, setMerchantNet] = useState(initialMerchantNet);
+  const [isUpdatingSimulator, setIsUpdatingSimulator] = useState(false);
   const [error, setError] = useState(initialError);
+  const isSimulator = initialPaymentProvider === 'simulator';
 
   useEffect(() => {
     if (!checkoutId || initialState !== 'waiting') return;
@@ -48,8 +60,14 @@ export default function PaymentReturnStatus({
 
         setCustomerName(typeof data.customerName === 'string' ? data.customerName : '');
         setTotal(typeof data.total === 'number' ? data.total : null);
+        setServiceFee(typeof data.serviceFee === 'number' ? data.serviceFee : 0);
+        setMerchantNet(typeof data.merchantNet === 'number' ? data.merchantNet : 0);
         if (data.status === 'paid' && data.paymentStatus === 'paid') {
           setState('paid');
+          return;
+        }
+        if (data.status === 'refunded' && data.paymentStatus === 'refunded') {
+          setState('refunded');
           return;
         }
         if (data.status === 'cancelled' || ['expired', 'failed'].includes(data.paymentStatus)) {
@@ -76,6 +94,31 @@ export default function PaymentReturnStatus({
 
   const currentState = state;
 
+  async function simulateStatus(nextStatus: 'paid' | 'failed' | 'refunded') {
+    if (isUpdatingSimulator) return;
+    setIsUpdatingSimulator(true);
+    setError('');
+    try {
+      const response = await fetch(`/api/checkouts/${encodeURIComponent(checkoutId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? 'Status simulasi gagal diperbarui.');
+      setServiceFee(typeof data.serviceFee === 'number' ? data.serviceFee : 0);
+      setMerchantNet(typeof data.merchantNet === 'number' ? data.merchantNet : 0);
+      setState(data.status === 'refunded' ? 'refunded' : data.status);
+      if (data.status === 'failed') {
+        setError('Pembayaran simulasi gagal. Pesanan dibatalkan dan reservasi voucher dilepas.');
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Status simulasi gagal diperbarui.');
+    } finally {
+      setIsUpdatingSimulator(false);
+    }
+  }
+
   return (
     <main className="storefront">
       <header className="site-header">
@@ -100,6 +143,14 @@ export default function PaymentReturnStatus({
               <h1 className="return-heading">Pesananmu sedang<br /><em>kami siapkan.</em></h1>
               <p className="success-copy">Terima kasih, {customerName}. Pembayaran sebesar <strong>{formatRupiah(total ?? 0)}</strong> sudah diterima.</p>
               <div className="receipt-number">NO. PESANAN <strong>IM-{checkoutId.slice(-8).toUpperCase()}</strong></div>
+              <p className="secure-note">Biaya layanan {initialFeeIsEstimate ? 'estimasi demo' : ''}: {formatRupiah(serviceFee)} · Estimasi penerimaan merchant: {formatRupiah(merchantNet)}.</p>
+              {isSimulator && <p className="secure-note">Status ini hanya simulasi internal; tidak ada pembayaran atau refund nyata yang dikirim.</p>}
+            </>
+          ) : currentState === 'refunded' ? (
+            <>
+              <h1 className="return-heading">Refund simulasi<br /><em>telah dicatat.</em></h1>
+              <p className="success-copy">Refund ini hanya mengubah status internal demo; dana tidak dikirim kembali ke bank atau penyedia pembayaran.</p>
+              <p className="secure-note">Biaya layanan estimasi tetap menjadi beban demo merchant: {formatRupiah(serviceFee)} · Estimasi penerimaan bersih: {formatRupiah(merchantNet)}.</p>
             </>
           ) : currentState === 'failed' ? (
             <>
@@ -109,9 +160,32 @@ export default function PaymentReturnStatus({
           ) : (
             <>
               <h1 className="return-heading">Menunggu konfirmasi<br /><em>pembayaran.</em></h1>
-              <p className="success-copy">Kami sedang menunggu konfirmasi Xendit untuk pesanan {checkoutId.slice(-8).toUpperCase()}.</p>
-              <p className="secure-note">Halaman ini akan diperbarui otomatis setelah webhook memverifikasi pembayaran.</p>
+              <p className="success-copy">{isSimulator ? 'Mode simulator aktif untuk' : 'Kami sedang menunggu konfirmasi Xendit untuk'} pesanan {checkoutId.slice(-8).toUpperCase()}.</p>
+              {isSimulator ? (
+                <>
+                  <p className="secure-note">Simulasi ini tidak menagih dana. Estimasi biaya layanan: {formatRupiah(serviceFee)}.</p>
+                  {error && <p className="api-error" role="alert">{error}</p>}
+                  <div className="simulator-actions">
+                    <button className="primary-button" type="button" disabled={isUpdatingSimulator} onClick={() => void simulateStatus('paid')}>
+                      {isUpdatingSimulator ? 'Memperbarui...' : 'Simulasikan berhasil'}
+                    </button>
+                    <button className="text-back" type="button" disabled={isUpdatingSimulator} onClick={() => void simulateStatus('failed')}>
+                      Simulasikan gagal
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="secure-note">Halaman ini akan diperbarui otomatis setelah webhook memverifikasi pembayaran.</p>
+              )}
             </>
+          )}
+          {isSimulator && currentState === 'paid' && (
+            <div className="simulator-actions">
+              <button className="text-back" type="button" disabled={isUpdatingSimulator} onClick={() => void simulateStatus('refunded')}>
+                {isUpdatingSimulator ? 'Memperbarui...' : 'Simulasikan refund'}
+              </button>
+              {error && <p className="api-error" role="alert">{error}</p>}
+            </div>
           )}
           <Link className="primary-button success-return" href="/">
             Kembali ke menu <ArrowRight size={16} />

@@ -20,9 +20,13 @@ export default async function PaymentReturnPage({ searchParams }: PageProps) {
   }
   if (user.role !== 'customer') redirect('/account');
 
-  let initialState: 'waiting' | 'paid' | 'failed' = checkoutId ? 'waiting' : 'failed';
+  let initialState: 'waiting' | 'paid' | 'failed' | 'refunded' = checkoutId ? 'waiting' : 'failed';
   let initialCustomerName = '';
   let initialTotal: number | null = null;
+  let initialPaymentProvider = 'xendit';
+  let initialServiceFee = 0;
+  let initialMerchantNet = 0;
+  let initialFeeIsEstimate = true;
   let initialError = checkoutId ? '' : 'ID pesanan tidak ditemukan pada tautan kembali pembayaran.';
 
   if (checkoutId) {
@@ -40,9 +44,20 @@ export default async function PaymentReturnPage({ searchParams }: PageProps) {
       } else {
         initialCustomerName = checkout.customerName;
         initialTotal = checkout.total;
-        const paidPayment = await Payment.exists({ checkoutId: checkout._id, status: 'paid' });
-        if (checkout.status === 'paid' && paidPayment) initialState = 'paid';
-        else if (checkout.status === 'cancelled') {
+        const payment = await Payment.findOne({ checkoutId: checkout._id })
+          .select('status provider serviceFee merchantNet feeIsEstimate')
+          .lean();
+        initialPaymentProvider = payment?.provider ?? 'xendit';
+        initialServiceFee = payment?.serviceFee ?? 0;
+        initialMerchantNet = payment?.merchantNet ?? 0;
+        initialFeeIsEstimate = payment?.feeIsEstimate ?? true;
+        if (checkout.status === 'paid' && payment?.status === 'paid') initialState = 'paid';
+        else if (checkout.status === 'refunded' && payment?.status === 'refunded') initialState = 'refunded';
+        else if (
+          checkout.status === 'cancelled' ||
+          payment?.status === 'failed' ||
+          payment?.status === 'expired'
+        ) {
           initialState = 'failed';
           initialError = 'Pembayaran belum selesai. Silakan kembali ke toko dan buat pesanan baru.';
         }
@@ -58,6 +73,10 @@ export default async function PaymentReturnPage({ searchParams }: PageProps) {
       initialState={initialState}
       initialCustomerName={initialCustomerName}
       initialTotal={initialTotal}
+      initialPaymentProvider={initialPaymentProvider}
+      initialServiceFee={initialServiceFee}
+      initialMerchantNet={initialMerchantNet}
+      initialFeeIsEstimate={initialFeeIsEstimate}
       initialError={initialError}
     />
   );

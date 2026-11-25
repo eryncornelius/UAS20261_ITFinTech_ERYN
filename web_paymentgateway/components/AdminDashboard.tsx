@@ -26,6 +26,7 @@ type Review = {
   discountAmount: number;
   voucherCode: string;
   total: number;
+  checkoutStatus: string;
   paymentStatus: string;
   riskScore: number;
   reasons: string[];
@@ -64,6 +65,23 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
+function formatStatus(value: string) {
+  const labels: Record<string, string> = {
+    pending_payment: 'Menunggu pembayaran',
+    pending: 'Menunggu',
+    paid: 'Berhasil',
+    failed: 'Gagal',
+    expired: 'Kedaluwarsa',
+    refunded: 'Refund',
+    cancelled: 'Dibatalkan',
+  };
+  return labels[value] ?? value;
+}
+
+function riskLevel(score: number) {
+  return score >= 70 ? 'Tinggi' : 'Perlu ditinjau';
+}
+
 function toLocalDateTime(value: string | Date) {
   const date = new Date(value);
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
@@ -86,6 +104,7 @@ export default function AdminDashboard() {
   const [notice, setNotice] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [reviewingId, setReviewingId] = useState('');
 
   async function loadDashboard() {
     setError('');
@@ -185,6 +204,8 @@ export default function AdminDashboard() {
   }
 
   async function reviewOrder(checkoutId: string, decision: 'approved' | 'rejected') {
+    if (reviewingId) return;
+    setReviewingId(checkoutId);
     setError('');
     setNotice('');
     try {
@@ -197,6 +218,8 @@ export default function AdminDashboard() {
       await loadDashboard();
     } catch (reviewError) {
       setError(reviewError instanceof Error ? reviewError.message : 'Tinjauan gagal disimpan.');
+    } finally {
+      setReviewingId('');
     }
   }
 
@@ -209,7 +232,7 @@ export default function AdminDashboard() {
       <div className="dashboard-content">
         <p className="panel-kicker">DASHBOARD ADMIN / ANALIS RISIKO</p>
         <h1>Promo dan tinjauan risiko</h1>
-        <p className="dashboard-intro">Konfigurasikan voucher serta tinjau order dengan skor risiko 40 atau lebih.</p>
+        <p className="dashboard-intro">Konfigurasikan voucher serta tinjau order yang mencapai skor risiko 40/100. Skor adalah indikator untuk ditinjau, bukan bukti fraud.</p>
         {error && <p className="api-error" role="alert">{error}</p>}
         {notice && <p className="dashboard-notice" role="status">{notice}</p>}
 
@@ -253,12 +276,29 @@ export default function AdminDashboard() {
             <div className="managed-order-list">
               {reviews.map((review) => (
                 <article className="managed-order" key={review.checkoutId}>
-                  <div className="order-heading"><strong>IM-{review.checkoutId.slice(-8).toUpperCase()} · {review.customerName}</strong><span>Skor risiko {review.riskScore}/100</span></div>
+                  <div className="order-heading">
+                    <strong>IM-{review.checkoutId.slice(-8).toUpperCase()} · {review.customerName}</strong>
+                    <span className={`risk-score ${review.riskScore >= 70 ? 'risk-score-high' : ''}`}>
+                      Risiko {riskLevel(review.riskScore)} · {review.riskScore}/100
+                    </span>
+                  </div>
+                  <small className="review-meta">{formatDate(review.createdAt)} · Pesanan {formatStatus(review.checkoutStatus)} · Pembayaran {formatStatus(review.paymentStatus)}</small>
                   <p>{review.items.join(', ')}</p>
                   <p>{review.voucherCode ? `Voucher ${review.voucherCode} · diskon ${formatRupiah(review.discountAmount)}` : 'Tanpa voucher'} · tagihan {formatRupiah(review.total)}</p>
-                  <ul className="risk-reasons">{review.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                  {review.reasons.length > 0 ? (
+                    <ul className="risk-reasons" aria-label="Alasan skor risiko">
+                      {review.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+                    </ul>
+                  ) : <p className="review-meta">Tidak ada alasan risiko tersimpan. Periksa transaksi secara manual sebelum mengambil keputusan.</p>}
                   <label className="field-label">Catatan review<textarea rows={2} maxLength={500} value={reviewNotes[review.checkoutId] ?? ''} onChange={(event) => setReviewNotes({ ...reviewNotes, [review.checkoutId]: event.target.value })} /></label>
-                  <div className="review-actions"><button className="primary-button" onClick={() => void reviewOrder(review.checkoutId, 'approved')}>Setujui</button><button className="review-reject" onClick={() => void reviewOrder(review.checkoutId, 'rejected')}>Tolak</button></div>
+                  <div className="review-actions">
+                    <button className="primary-button" disabled={Boolean(reviewingId)} onClick={() => void reviewOrder(review.checkoutId, 'approved')}>
+                      {reviewingId === review.checkoutId ? 'Menyimpan...' : 'Setujui'}
+                    </button>
+                    <button className="review-reject" disabled={Boolean(reviewingId)} onClick={() => void reviewOrder(review.checkoutId, 'rejected')}>
+                      {reviewingId === review.checkoutId ? 'Menyimpan...' : 'Tolak'}
+                    </button>
+                  </div>
                   <small>Keputusan dicatat di audit log; pembatalan pembayaran/refund tidak dilakukan otomatis.</small>
                 </article>
               ))}

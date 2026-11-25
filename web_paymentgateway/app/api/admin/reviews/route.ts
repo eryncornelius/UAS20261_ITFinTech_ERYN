@@ -1,5 +1,5 @@
 import { authorizeRoles } from '@/lib/role-access';
-import { Checkout } from '@/lib/models';
+import { Checkout, Payment } from '@/lib/models';
 import { connectToDatabase, getMongoErrorMessage, isMongoUnavailable } from '@/lib/mongodb';
 
 export async function GET() {
@@ -15,6 +15,12 @@ export async function GET() {
       .limit(100)
       .select('customerName items subtotal discountAmount voucherCode total status riskScore riskReasons createdAt')
       .lean();
+    const payments = await Payment.find({ checkoutId: { $in: orders.map((order) => order._id) } })
+      .select('checkoutId status')
+      .lean();
+    const paymentStatusByCheckout = new Map(
+      payments.map((payment) => [payment.checkoutId.toString(), payment.status]),
+    );
 
     return Response.json({
       reviews: orders.map((order) => ({
@@ -25,9 +31,10 @@ export async function GET() {
         discountAmount: order.discountAmount ?? 0,
         voucherCode: order.voucherCode ?? '',
         total: order.total,
-        paymentStatus: order.status,
+        checkoutStatus: order.status,
+        paymentStatus: paymentStatusByCheckout.get(order._id.toString()) ?? 'pending',
         riskScore: order.riskScore,
-        reasons: order.riskReasons,
+        reasons: order.riskReasons ?? [],
         createdAt: order.createdAt,
       })),
     });

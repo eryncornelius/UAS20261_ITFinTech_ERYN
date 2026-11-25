@@ -19,7 +19,13 @@ export function dashboardForRole(role: UserRole): string {
 
 export function isSameOrigin(request: Request): boolean {
   const origin = request.headers.get('origin');
-  return origin !== null && origin === new URL(request.url).origin;
+  if (!origin) return false;
+
+  const allowedOrigins = new Set([new URL(request.url).origin]);
+  const appUrl = process.env.APP_URL;
+  if (appUrl) allowedOrigins.add(new URL(appUrl).origin);
+
+  return allowedOrigins.has(origin);
 }
 
 export async function createUserSession(userId: string): Promise<void> {

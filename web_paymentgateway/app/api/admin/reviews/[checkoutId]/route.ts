@@ -33,26 +33,48 @@ export async function PATCH(
     }
 
     await connectToDatabase();
-    const checkout = await Checkout.findOne({ _id: checkoutId, reviewStatus: 'pending' });
-    if (!checkout) return Response.json({ error: 'Order tidak ditemukan atau sudah ditinjau.' }, { status: 404 });
+    const session = await mongoose.startSession();
+    let updated = false;
+    try {
+      await session.withTransaction(async () => {
+        const checkout = await Checkout.findOneAndUpdate(
+          { _id: checkoutId, reviewStatus: 'pending' },
+          {
+            $set: {
+              reviewStatus: body.decision,
+              reviewedBy: authorization.user.id,
+              reviewedAt: new Date(),
+              reviewNote: typeof body.note === 'string' ? body.note.trim() : '',
+            },
+          },
+          { new: true, session },
+        );
+        if (!checkout) return;
 
-    const previousDecision = checkout.reviewStatus;
-    checkout.reviewStatus = body.decision;
-    checkout.reviewedBy = authorization.user.id;
-    checkout.reviewedAt = new Date();
-    checkout.reviewNote = typeof body.note === 'string' ? body.note.trim() : '';
-    await checkout.save();
-    await AuditLog.create({
-      actorId: authorization.user.id,
-      action: `risk_review.${body.decision}`,
-      entityType: 'checkout',
-      entityId: checkout._id,
-      details: {
-        previousDecision,
-        riskScore: checkout.riskScore,
-        noteProvided: Boolean(checkout.reviewNote),
-      },
-    });
+        await AuditLog.create(
+          [{
+            actorId: authorization.user.id,
+            action: `risk_review.${body.decision}`,
+            entityType: 'checkout',
+            entityId: checkout._id,
+            details: {
+              previousDecision: 'pending',
+              decision: body.decision,
+              riskScore: checkout.riskScore,
+              note: checkout.reviewNote,
+            },
+          }],
+          { session },
+        );
+        updated = true;
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    if (!updated) {
+      return Response.json({ error: 'Order tidak ditemukan atau sudah ditinjau.' }, { status: 409 });
+    }
 
     return Response.json({
       ok: true,

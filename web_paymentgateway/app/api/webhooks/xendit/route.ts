@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { timingSafeEqual } from 'node:crypto';
 import { Checkout, Payment } from '@/lib/models';
 import { connectToDatabase } from '@/lib/mongodb';
+import { calculateMerchantNet } from '@/lib/payment-financials';
 import { releaseVoucherUsage } from '@/lib/vouchers';
 
 type XenditInvoiceEvent = {
@@ -64,6 +65,7 @@ export async function POST(request: Request) {
             status: 'paid',
             paidAt: event.paid_at ? new Date(event.paid_at) : new Date(),
             providerInvoiceId: event.id ?? payment.providerInvoiceId,
+            merchantNet: calculateMerchantNet(payment.amount, payment.serviceFee, 'paid'),
           },
         },
         { new: true },
@@ -81,16 +83,17 @@ export async function POST(request: Request) {
       return Response.json({ received: true, status: 'paid' });
     }
 
-    if (event.status === 'EXPIRED') {
+    if (event.status === 'EXPIRED' || event.status === 'FAILED') {
+      const terminalStatus = event.status === 'EXPIRED' ? 'expired' : 'failed';
       const session = await mongoose.startSession();
       try {
         await session.withTransaction(async () => {
-          const expiredPayment = await Payment.findOneAndUpdate(
+          const terminalPayment = await Payment.findOneAndUpdate(
             { _id: payment._id, status: 'pending' },
-            { $set: { status: 'expired' } },
+            { $set: { status: terminalStatus, serviceFee: 0, merchantNet: 0 } },
             { new: true, session },
           );
-          if (!expiredPayment) return;
+          if (!terminalPayment) return;
 
           const checkout = await Checkout.findOneAndUpdate(
             { _id: payment.checkoutId, status: 'pending_payment' },
@@ -104,7 +107,7 @@ export async function POST(request: Request) {
       } finally {
         await session.endSession();
       }
-      return Response.json({ received: true, status: 'expired' });
+      return Response.json({ received: true, status: terminalStatus });
     }
 
     return Response.json({ received: true, ignored: true });

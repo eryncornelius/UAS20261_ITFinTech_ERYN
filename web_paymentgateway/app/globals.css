@@ -151,6 +151,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .dashboard-panel-heading .panel-kicker { margin: 0 0 5px; }
 .dashboard-panel-heading h2 { margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 21px; font-weight: 400; }
 .dashboard-count { color: var(--muted); font-size: 11px; }
+.merchant-financial-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 14px 0 7px; }
+.merchant-financial-summary > div { display: flex; flex-direction: column; gap: 5px; padding: 12px; background: #f7f6f1; }
+.merchant-financial-summary span, .financial-disclaimer { color: var(--muted); font-size: 10px; }
+.merchant-financial-summary strong { color: var(--green-dark); font-size: 15px; }
+.merchant-financial-summary .net-receipts { border: 1px solid #bbd5bd; background: #f0f8ef; }
+.financial-disclaimer { display: block; margin-bottom: 12px; }
+.simulator-actions { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.simulator-actions .primary-button { margin: 0; }
+.simulator-actions .text-back:disabled { opacity: .6; cursor: wait; }
 .dashboard-notice { padding: 10px 12px; border: 1px solid #bbd5bd; background: #f0f8ef; color: #357344; font-size: 11px; }
 .merchant-product-form, .admin-voucher-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 15px; }
 .merchant-product-form .field-label input, .merchant-product-form .field-label select, .admin-voucher-form .field-label input, .admin-voucher-form .field-label select { width: 100%; display: block; margin-top: 7px; padding: 10px; border: 1px solid #e1ded4; background: var(--white); color: var(--ink); font-size: 11px; }
@@ -176,9 +185,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .voucher-message { margin: -7px 0 12px; color: var(--green); font-size: 10px; }
 .product-grid .api-error { grid-column: 1 / -1; }
 .risk-reasons { margin: 10px 0; padding-left: 20px; color: #804b23; font-size: 11px; line-height: 1.6; }
+.risk-score { color: #804b23 !important; font-weight: 600; }
+.risk-score-high { color: #a63e35 !important; }
+.review-meta { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
 .review-actions { display: flex; gap: 9px; margin: 12px 0; }
 .review-actions .primary-button { min-height: 34px; }
 .review-reject { padding: 0 14px; border: 1px solid #bd5a50; background: transparent; color: #a63e35; cursor: pointer; font-size: 11px; }
+.review-actions button:disabled { opacity: .6; cursor: wait; }
 .admin-voucher-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .cart-bar { position: sticky; z-index: 4; bottom: 15px; display: flex; justify-content: space-between; align-items: center; margin: 26px 0 0; padding: 12px 15px; border: 1px solid #dcded4; background: var(--white); box-shadow: 0 5px 20px rgba(31,42,32,.08); }
 .cart-bar-info { display: flex; align-items: center; gap: 11px; }
@@ -346,6 +359,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .dashboard-content { padding: 25px 16px 50px; }
   .dashboard-content > h1 { font-size: 27px; }
   .dashboard-panel { padding: 14px; }
+  .merchant-financial-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .merchant-financial-summary .net-receipts { grid-column: 1 / -1; }
   .merchant-product-form, .admin-voucher-form { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
   .managed-order .order-heading, .managed-order .order-financial { flex-direction: column; gap: 5px; }
   .managed-product { align-items: flex-start; flex-direction: column; }
